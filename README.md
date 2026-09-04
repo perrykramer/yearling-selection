@@ -1,5 +1,7 @@
 # West Paces Sale Book
 
+**https://yearling-selection.vercel.app/**
+
 Keeneland September yearling selection for West Paces Racing. Four people — Conor, Nick,
 Larry and Perry — walking 4,642 yearlings across 46 barns, marking In / Maybe / Out,
 keeping notes and shortlists, and seeing each other's work.
@@ -79,7 +81,10 @@ Deployment Protection is on and Conor is locked out: Settings → Deployment Pro
 Then, on a phone — this takes five minutes and is the only test that exercises the real
 stack end to end:
 
-1. Open it, sign in, **Add to Home Screen**, and reopen it from the home screen.
+1. Open it, sign in, **Add to Home Screen**, and reopen it from the home screen. Tap the
+   avatar: under BUILD the sheet must read **`salebook-v2 · offline ready`**. If it says
+   *Not installed yet*, nothing is cached and step 4 will fail. If it says *Update ready*,
+   close the app and reopen it, then look again.
 2. Mark a horse In. The bar reads *Synced just now*.
 3. **Airplane mode.** Mark five more. The bar must read *5 changes held — no signal*.
 4. **Force-quit the app and reopen it, still in airplane mode.** It must open, and all six
@@ -88,8 +93,15 @@ stack end to end:
 6. On a laptop, sign in as someone else. The verdicts appear within a minute, and marking
    one of them the other way shows both verdicts on the row, with initials.
 
-If step 4 fails, the device may be holding an older service worker: open the app once with
-signal, close it, open it again, then retest.
+If step 4 fails, the device is holding an older service worker: open the app once with
+signal, close it, open it again, then retest. The BUILD line in the account sheet is the
+way to tell — it reports the worker actually serving that device, not the version this
+repo happens to be on, and those disagree precisely when something is wrong.
+
+There is deliberately no "reset the app" button. The moment anyone would reach for one is
+when something looks wrong at a barn — which is exactly when there is no signal to
+re-download the shell, so it would turn a recoverable problem into a dead app with a day's
+marks stranded inside it.
 
 ## Changing the catalog
 

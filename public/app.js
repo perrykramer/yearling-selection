@@ -120,6 +120,47 @@ function copyExport(){
   }
 }
 
+/* ---------- which build is actually running ----------
+   Read from the worker controlling this device, not from a constant in this file.
+   The two disagree exactly when it matters: a phone showing a fresh page while an old
+   worker still serves it the old cached shell. Entirely on-device, so it works offline. */
+var BUILD = { version: null, waiting: false, asked: false };
+
+function probeBuild(){
+  if (BUILD.asked) return;
+  BUILD.asked = true;
+  if (!('serviceWorker' in navigator)) return;
+
+  navigator.serviceWorker.getRegistration().then(function(reg){
+    if (reg && reg.waiting){ BUILD.waiting = true; scheduleRender(); }
+  }).catch(function(){});
+
+  var sw = navigator.serviceWorker.controller;
+  if (!sw) return;                       // no controller: offline is not armed yet
+  var ch = new MessageChannel();
+  var done = false;
+  var timer = setTimeout(function(){ done = true; }, 1500);   // never let the sheet hang
+  ch.port1.onmessage = function(ev){
+    if (done) return;
+    clearTimeout(timer);
+    done = true;
+    BUILD.version = ev.data && ev.data.version;
+    scheduleRender();
+  };
+  try { sw.postMessage({ type: 'version' }, [ch.port2]); } catch (e){ clearTimeout(timer); }
+}
+
+function buildLine(){
+  if (!('serviceWorker' in navigator))
+    return '<span style="color:var(--out)">This browser cannot work offline.</span>';
+  if (BUILD.waiting)
+    return '<span style="color:var(--mb)">Update ready — close the app and reopen it.</span>';
+  if (BUILD.version)
+    return esc(BUILD.version) + ' · offline ready';
+  // No worker is controlling this device, so nothing is cached: it will not open at a barn.
+  return '<span style="color:var(--mb)">Not installed yet — open once with signal.</span>';
+}
+
 /* ---------- session ---------- */
 var SESSION = null;                 // the signed-in Supabase session, or null
 var AUTH = { email:'', pw:'', error:null, busy:false };   // pw is in memory only, never stored
@@ -650,6 +691,12 @@ function sheetHTML(){
       +     (st.error ? '<br><span style="color:var(--out)">' + esc(st.error) + '</span>' : '')
       +   '</div>'
       + '</div>'
+      + '<div style="padding:14px 20px 0"><div class="pgh">BUILD</div>'
+      +   '<div class="sub" style="font-size:13px;line-height:1.6">'
+      +     buildLine() + '<br>'
+      +     esc(SALEBOOK_CONFIG.catalog.replace(/^data\//, ''))
+      +   '</div>'
+      + '</div>'
       + '<div style="display:flex;gap:9px;padding:16px 20px 0">'
       +   '<button class="btn ghost" style="flex:1" data-syncnow="1">'+icon('cloud')+'Sync now</button>'
       +   '<button class="btn ghost" style="flex:1" data-exportall="1">'+icon('doc')+'Export marks</button>'
@@ -784,7 +831,7 @@ document.addEventListener('click', function(ev){
 
   if (d.stop != null && d.close == null) { ev.stopPropagation(); }
   if (d.authgo != null){ doSignIn(); return; }
-  if (d.account != null){ V.sheet = 'account'; V.confirmOut = null; render(); return; }
+  if (d.account != null){ V.sheet = 'account'; V.confirmOut = null; probeBuild(); render(); return; }
   if (d.syncnow != null){ Store.sync(); toast(navigator.onLine ? 'Syncing…' : 'No signal — it will send itself.'); return; }
   if (d.signout != null){
     // Two-tap, like every other destructive action here, and louder when work is queued.
@@ -1142,7 +1189,10 @@ function boot(){
         if (!sw) return;
         sw.addEventListener('statechange', function(){
           // A fix on sale day has to be able to reach a phone that is already installed.
-          if (sw.state === 'installed' && navigator.serviceWorker.controller) toast('Update ready — reopen the app.');
+          if (sw.state === 'installed' && navigator.serviceWorker.controller){
+            BUILD.waiting = true;
+            toast('Update ready — reopen the app.');
+          }
         });
       });
     }).catch(function(){});

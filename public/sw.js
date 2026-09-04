@@ -53,6 +53,15 @@ self.addEventListener('activate', function(e){
   );
 });
 
+// The worker is the only thing that knows which build is genuinely serving this device.
+// A phone can show a freshly downloaded page while an older worker still controls it and
+// hands over the old cached shell, so the page cannot answer this about itself.
+self.addEventListener('message', function(e){
+  if (e.data && e.data.type === 'version' && e.ports && e.ports[0]){
+    e.ports[0].postMessage({ version: VERSION });
+  }
+});
+
 self.addEventListener('fetch', function(e){
   var req = e.request;
   if (req.method !== 'GET') return;

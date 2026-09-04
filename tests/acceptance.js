@@ -167,6 +167,20 @@ var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); });
     ok('the shell is precached, and not as a redirect',
        shell.ok && shell.redirected === false && shell.status === 200, JSON.stringify(shell));
 
+    // The account sheet must report the build the worker is actually serving, so that
+    // "which version is Conor's phone on?" is answerable by tapping one panel.
+    await field.page.click('[data-account]');
+    await field.page.waitForFunction(function(){
+      var el = document.querySelector('.sheetin');
+      return el && /salebook-v\d/.test(el.innerText);
+    }, null, { timeout: 10000 });
+    var sheet = await field.page.evaluate(function(){
+      return document.querySelector('.sheetin').innerText.replace(/\s+/g, ' ');
+    });
+    ok('the account sheet names the running build and says offline is ready',
+       /salebook-v2 · offline ready/.test(sheet), JSON.stringify(sheet.slice(0, 200)));
+    await field.page.evaluate(function(){ V.sheet = null; render(); });
+
     var hips = [];
     for (var i = 0; i < 20; i++) hips.push(200 + i);
 
