@@ -59,10 +59,37 @@ small stand-in for the endpoints the app actually calls.
 ## Deploying
 
 Vercel, static, no build command, output directory `public/`. `vercel.json` carries the
-cache headers: the catalog and fonts are immutable (they are versioned by filename),
-`index.html` and `sw.js` are never cached, so an update reaches installed phones.
+cache headers: the catalog and fonts are immutable (they are versioned by filename), `/`
+and `sw.js` are never cached, so an update reaches installed phones.
 
 Push to the production branch and Vercel redeploys. Nothing else to do.
+
+**Do not turn on `cleanUrls`.** It makes Vercel answer `/index.html` with a 308 to `/`, and
+a redirected response cannot fulfil a navigation request. A service worker holding the
+shell under that key opens fine on a local server and fails to open at a barn. The worker
+now caches the shell under `./` only, and `tests/static.js` reproduces the redirect so the
+suite would catch a regression — but the setting is a trap and there is nothing to gain
+from it, since the site has one HTML file.
+
+### Checking a deploy before it goes to the team
+
+Open the production URL in a **private window**. If it asks you to log in to Vercel,
+Deployment Protection is on and Conor is locked out: Settings → Deployment Protection.
+
+Then, on a phone — this takes five minutes and is the only test that exercises the real
+stack end to end:
+
+1. Open it, sign in, **Add to Home Screen**, and reopen it from the home screen.
+2. Mark a horse In. The bar reads *Synced just now*.
+3. **Airplane mode.** Mark five more. The bar must read *5 changes held — no signal*.
+4. **Force-quit the app and reopen it, still in airplane mode.** It must open, and all six
+   marks must still be there. This is the step that catches a broken offline shell.
+5. Airplane mode off. The bar returns to *Synced just now* within a few seconds.
+6. On a laptop, sign in as someone else. The verdicts appear within a minute, and marking
+   one of them the other way shows both verdicts on the row, with initials.
+
+If step 4 fails, the device may be holding an older service worker: open the app once with
+signal, close it, open it again, then retest.
 
 ## Changing the catalog
 

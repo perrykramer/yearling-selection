@@ -11,10 +11,13 @@
    has marked, which is worse than an honest offline state.
    ========================================================================== */
 
-var VERSION = 'salebook-v1';
+// v2: the shell is cached under './' only. Under Vercel's cleanUrls, 'index.html'
+// answers with a 308 to '/', and a redirected response cannot fulfil a navigation —
+// so a worker that precached it opened fine on a local server and failed to open at
+// a barn. Never key the shell on anything that can redirect.
+var VERSION = 'salebook-v2';
 var SHELL = [
   './',
-  'index.html',
   'app.css',
   'app.js',
   'store.js',
@@ -60,7 +63,7 @@ self.addEventListener('fetch', function(e){
   // Every route renders the same shell; the app reads the hash itself.
   if (req.mode === 'navigate'){
     e.respondWith(
-      caches.match('index.html').then(function(hit){
+      caches.match('./').then(function(hit){
         return hit || fetch(req);
       })
     );

@@ -4,7 +4,6 @@
   "installCommand": null,
   "outputDirectory": "public",
   "framework": null,
-  "cleanUrls": true,
   "headers": [
     {
       "source": "/sw.js",
@@ -14,7 +13,7 @@
       ]
     },
     {
-      "source": "/index.html",
+      "source": "/",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     },
     {

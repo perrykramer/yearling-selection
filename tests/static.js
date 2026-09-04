@@ -8,6 +8,15 @@ var TYPES = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css',
 function start(port, root){
   var server = http.createServer(function(req, res){
     var p = decodeURIComponent(url.parse(req.url).pathname);
+
+    // Vercel with cleanUrls answers /index.html with a 308 to /. Reproduce that here —
+    // a cached redirected response cannot serve a navigation, so a service worker that
+    // precaches 'index.html' will fail to open offline in production while passing
+    // against a naive local server. The fixture is deliberately stricter than the edge.
+    if (p === '/index.html'){
+      res.writeHead(308, { Location: '/' });
+      return res.end();
+    }
     if (p === '/' ) p = '/index.html';
     var file = path.join(root, p);
     if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }

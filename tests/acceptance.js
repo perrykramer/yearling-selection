@@ -154,6 +154,19 @@ var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); });
     });
     await waitSynced(field.page);
 
+    // State the invariant directly: the cached shell must not be a redirected response,
+    // because a redirected response cannot serve a navigation, and the app would then
+    // fail to open with no signal.
+    var shell = await field.page.evaluate(function(){
+      return caches.open('salebook-v2').then(function(c){
+        return c.match('./').then(function(hit){
+          return hit ? { ok: true, redirected: hit.redirected, status: hit.status } : { ok: false };
+        });
+      });
+    });
+    ok('the shell is precached, and not as a redirect',
+       shell.ok && shell.redirected === false && shell.status === 200, JSON.stringify(shell));
+
     var hips = [];
     for (var i = 0; i < 20; i++) hips.push(200 + i);
 
