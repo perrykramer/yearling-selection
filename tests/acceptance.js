@@ -254,6 +254,66 @@ var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); });
     ok('both survive — neither clobbers the other',
        merged.indexOf(501) >= 0 && merged.indexOf(502) >= 0, JSON.stringify(merged));
 
+    /* ---------------------------------------------------------------- 2b */
+    head('2b · Marks made offline hours ago still reach the other phone.');
+    // The field case the suite never covered: work done at a barn carries the timestamp
+    // of when it was made, not when it uploaded. If the other phone's cursor has moved
+    // past that moment in the meantime, those marks must still arrive.
+    var late = await openApp(browser, 'conor@westpaces.local');
+    await waitSynced(late.page);
+    await late.ctx.setOffline(true);
+    for (var lh of [700, 701, 702]) await mark(late.page, lh, 'in');
+    await late.page.evaluate(function(){ return Store.settled(); });
+
+    // Meanwhile Nick keeps working, which drags his cursor past the moment those marks
+    // were made.
+    await mark(nick.page, 703, 'out');
+    await waitSynced(nick.page);
+    await nick.page.evaluate(function(){ return Store.sync(); });
+
+    await late.ctx.setOffline(false);
+    await waitSynced(late.page, 30000);
+
+    var arrived = false, lt0 = Date.now();
+    while (Date.now() - lt0 < 60000){
+      await nick.page.evaluate(function(){ return Store.sync(); });
+      arrived = await nick.page.evaluate(function(){
+        return [700, 701, 702].every(function(h){
+          return Store.teamVerdicts(h).some(function(t){ return t.v === 'in'; });
+        });
+      });
+      if (arrived) break;
+      await sleep(2000);
+    }
+    ok('offline marks reach the other phone even though they were made earlier', arrived);
+
+    /* ---------------------------------------------------------------- 2c */
+    head('2c · Sign out, sign in as someone else on the same browser, see their work.');
+    // Exactly the steps that failed in production.
+    var shared = await openApp(browser, 'conor@westpaces.local');
+    await waitSynced(shared.page);
+    await mark(shared.page, 810, 'in');
+    await waitSynced(shared.page);
+    await shared.page.evaluate(function(){ return Store.sync(); });   // advance the cursor
+
+    await shared.page.evaluate(function(){ V.sheet = 'account'; render(); });
+    await shared.page.click('[data-signout]');
+    await shared.page.click('[data-signout]');                        // two-tap confirm
+    await shared.page.waitForSelector('#authemail', { timeout: 20000 });
+    await signIn(shared.page, 'larry@westpaces.local');
+    await waitSynced(shared.page, 30000);
+
+    var sawIt = false, st0 = Date.now();
+    while (Date.now() - st0 < 45000){
+      sawIt = await shared.page.evaluate(function(){
+        return Store.teamVerdicts(810).some(function(t){ return t.v === 'in'; });
+      });
+      if (sawIt) break;
+      await shared.page.evaluate(function(){ return Store.sync(); });
+      await sleep(1500);
+    }
+    ok('the next person signing in sees the previous person\'s marks', sawIt);
+
     /* ---------------------------------------------------------------- 5 */
     head('5 · Cold load under five seconds on cellular; second load instant.');
     var cold = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -280,6 +340,52 @@ var sleep = function(ms){ return new Promise(function(r){ setTimeout(r, ms); });
     var warmMs = Date.now() - w0;
     ok('second load is effectively instant', warmMs < 2000, warmMs + 'ms');
     await cold.close();
+
+    /* ---------------------------------------------------------------- cursor */
+    head('Cursor · a client cannot influence its own delivery, and pages do not truncate.');
+
+    // Post a row the way a client with a wrong clock or an old offline queue would, and
+    // confirm the server ignores the timestamp it was handed.
+    var stale = await conor.page.evaluate(function(){
+      return fetch(SALEBOOK_CONFIG.supabaseUrl + '/rest/v1/verdicts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=representation',
+          'Authorization': 'Bearer fake.' + Store.me()
+        },
+        body: JSON.stringify([{ hip: 4321, user_id: Store.me(), verdict: 'in',
+                                updated_at: '2020-01-01T00:00:00.000Z' }])
+      }).then(function(r){ return r.json(); });
+    });
+    ok('the server overrides a client-supplied updated_at',
+       Array.isArray(stale) && stale[0] && stale[0].updated_at.slice(0, 4) !== '2020',
+       JSON.stringify(stale && stale[0] && stale[0].updated_at));
+
+    // Supabase returns at most 1000 rows per request, so the pull has to page. Seed more
+    // rows than one page and confirm every one arrives.
+    var base = Date.now();
+    for (var pn = 0; pn < 1200; pn++){
+      api.tables.verdicts['9' + pn + ':' + USERS['nick@westpaces.local'].id] = {
+        hip: 90000 + pn, user_id: USERS['nick@westpaces.local'].id, verdict: 'maybe',
+        updated_at: new Date(base + pn).toISOString()
+      };
+    }
+    var pager = await openApp(browser, 'larry@westpaces.local');
+    await waitSynced(pager.page, 60000);
+    var seenAll = 0, pg0 = Date.now();
+    while (Date.now() - pg0 < 60000){
+      await pager.page.evaluate(function(){ return Store.sync(); });
+      seenAll = await pager.page.evaluate(function(){
+        var st = Store._state(), n = 0;
+        for (var k in st.verdicts) if (st.verdicts[k].hip >= 90000) n++;
+        return n;
+      });
+      if (seenAll >= 1200) break;
+      await sleep(500);
+    }
+    ok('a pull larger than one page arrives complete', seenAll === 1200, seenAll + '/1200');
+    await pager.ctx.close();
 
     /* ---------------------------------------------------------------- layout */
     head('Layout · 320 / 390 / 1440, every screen, no horizontal overflow.');

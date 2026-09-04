@@ -127,7 +127,10 @@ declare t text;
 begin
   foreach t in array array['profiles','verdicts','notes','lists','list_items','horse_pages'] loop
     execute format('drop trigger if exists set_updated_at on public.%I', t);
-    execute format('create trigger set_updated_at before update on public.%I
+    -- INSERT as well as UPDATE: updated_at drives incremental sync, so the server must
+    -- own it. If the client sets it, work done offline uploads carrying the time it was
+    -- made, and a teammate whose cursor has passed that moment never receives it.
+    execute format('create trigger set_updated_at before insert or update on public.%I
                     for each row execute function public.set_updated_at()', t);
   end loop;
 end $$;

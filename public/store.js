@@ -112,11 +112,20 @@ var Store = (function(){
       return idbAll('meta');
     }).then(function(m){
       S.cursors  = m.cursors  || {};
+      fullPullDone = false;      // one full read per session; a stale cursor is not trusted
       S.lastSync = m.lastSync || 0;
     });
   }
 
-  function saveMeta(){
+  // Bumped by reset(). A pull that was already in flight when someone signed out would
+  // otherwise persist the previous person's cursors on top of the cleared store — which is
+  // exactly how one account's cursor leaked into the next account's session and hid their
+  // work.
+  var generation = 0;
+  var fullPullDone = false;
+
+  function saveMeta(gen){
+    if (gen != null && gen !== generation) return Promise.resolve();
     return tx(['meta'],'readwrite', function(s){
       s[0].put(S.cursors, 'cursors');
       s[0].put(S.lastSync, 'lastSync');
@@ -196,45 +205,89 @@ var Store = (function(){
      cold start the cursor is empty and we pull everything, which for four
      people over one sale is small. */
 
+  // Supabase caps a response at 1000 rows by default, so a single request cannot be
+  // assumed to be the whole answer; keep going while pages come back full.
+  var PAGE = 500;
+
+  // Re-read a minute either side of the cursor rather than trusting it exactly. Rows can
+  // commit out of order relative to their timestamp, and a strictly-greater cursor turns
+  // any such row into a permanent hole — the app reports "synced" and the work is simply
+  // never delivered. Every local write is an idempotent upsert on a primary key, so
+  // re-reading rows we already have costs nothing.
+  var OVERLAP_MS = 60000;
+
   function pullTable(table){
-    var q = sb.from(table).select('*').order('updated_at', {ascending:true}).limit(5000);
-    var cur = S.cursors[table];
-    if (cur) q = q.gt('updated_at', cur);
-    return q.then(function(res){
-      if (res.error) throw res.error;
-      var rows = res.data || [];
-      if (!rows.length) return 0;
-      return tx([table],'readwrite', function(s){
-        rows.forEach(function(r){
-          var k = table === 'verdicts'   ? vkey(r.hip, r.user_id)
-                : table === 'list_items' ? ikey(r.list_id, r.hip)
-                : r.id;
-          S[table][k] = r;
-          s[0].put(r, k);
-          if (!S.cursors[table] || r.updated_at > S.cursors[table]) S.cursors[table] = r.updated_at;
+    var from = null;
+    if (!fullPullDone && S.cursors[table]) from = null;              // first sync: everything
+    else if (S.cursors[table]) from = new Date(Date.parse(S.cursors[table]) - OVERLAP_MS).toISOString();
+
+    var got = 0;
+
+    function page(after){
+      var q = sb.from(table).select('*').order('updated_at', {ascending:true}).limit(PAGE);
+      if (after) q = q.gt('updated_at', after);
+      return q.then(function(res){
+        if (res.error) throw res.error;
+        var rows = res.data || [];
+        if (!rows.length) return got;
+        var last = rows[rows.length - 1].updated_at;
+        return tx([table],'readwrite', function(s){
+          rows.forEach(function(r){
+            var k = table === 'verdicts'   ? vkey(r.hip, r.user_id)
+                  : table === 'list_items' ? ikey(r.list_id, r.hip)
+                  : r.id;
+            S[table][k] = r;
+            s[0].put(r, k);
+            if (!S.cursors[table] || r.updated_at > S.cursors[table]) S.cursors[table] = r.updated_at;
+          });
+        }).then(function(){
+          got += rows.length;
+          return rows.length === PAGE ? page(last) : got;
         });
-      }).then(function(){ return rows.length; });
-    });
+      });
+    }
+    return page(from);
   }
 
+  var inflight = null;
+
   function pull(){
-    if (!sb || !uid || S.syncing || !navigator.onLine) return Promise.resolve(0);
+    if (!sb || !uid || !navigator.onLine) return Promise.resolve(0);
+    // A pull already running is not a reason to report success and do nothing — a caller
+    // awaiting sync() (or tapping "Sync now") should get the real completion.
+    if (inflight) return inflight;
     S.syncing = true;
     onChange();
     var total = 0;
-    return TABLES.reduce(function(p, t){
+    var gen = generation;
+    inflight = TABLES.reduce(function(p, t){
       return p.then(function(){ return pullTable(t); }).then(function(n){ total += n; });
     }, Promise.resolve()).then(function(){
+      fullPullDone = true;
       S.lastSync = Date.now();
       S.lastError = null;
-      return saveMeta();
+      return saveMeta(gen);
     }).catch(function(err){
       S.lastError = String(err && err.message || err);
     }).then(function(){
       S.syncing = false;
+      inflight = null;
       onChange();
       return total;
     });
+    return inflight;
+  }
+
+  // Throw the cursors away and read everything back. Recovery for a device whose cursor
+  // has drifted past work it never received. Read-only: the outbox is untouched, so
+  // nothing waiting to send can be lost by tapping this.
+  function resync(){
+    // Let anything already running finish first, or clearing the cursors would race it.
+    return (inflight || Promise.resolve()).then(function(){
+      S.cursors = {};
+      fullPullDone = false;
+      return saveMeta();
+    }).then(pull);
   }
 
   // Flush first so our own work is never overwritten by a stale pull, then read.
@@ -264,7 +317,7 @@ var Store = (function(){
     // Tapping the live verdict again clears it. The row stays, with verdict null,
     // so the clearing syncs instead of the old value resurrecting from a cache.
     var next = (cur && cur.verdict === v) ? null : v;
-    local('verdicts', k, { hip: hip, user_id: uid, verdict: next, updated_at: nowISO() });
+    local('verdicts', k, { hip: hip, user_id: uid, verdict: next });
   }
 
   function addNote(hip, text){
@@ -466,6 +519,8 @@ var Store = (function(){
   }
 
   function reset(){
+    generation++;
+    fullPullDone = false;
     stopSync();
     S = { verdicts:{}, notes:{}, lists:{}, list_items:{}, profiles:{}, outbox:{},
           cursors:{}, lastSync:0, syncing:false, lastError:null };
@@ -478,7 +533,7 @@ var Store = (function(){
 
   return {
     init: init, ready: ready, settled: settled, reset: reset, sync: sync, flush: flush,
-    pull: pull, status: status,
+    pull: pull, resync: resync, status: status,
     me: function(){ return uid; },
     setVerdict: setVerdict, addNote: addNote, editNote: editNote, deleteNote: deleteNote,
     newList: newList, renameList: renameList, deleteList: deleteList,

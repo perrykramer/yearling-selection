@@ -154,13 +154,18 @@ whether this is finished — plus a layout sweep at 320, 390 and 1440 px checkin
 horizontal overflow on every screen.
 
 ```
-1  Conor marks hip 49 In; Nick sees it on another phone, another account, within a minute
-2  Twenty horses marked in airplane mode, app closed and reopened, signal restored — none lost
-3  Larry opens a shortlist on a laptop he has never used
-4  Conor and Nick add different horses to the same shortlist at once; both survive
-5  Cold load under five seconds on cellular; second load instant
-6  Conor In and Nick Out on one horse: both visible, neither overwrites
+1   Conor marks hip 49 In; Nick sees it on another phone, another account, within a minute
+2   Twenty horses marked in airplane mode, app closed and reopened, signal restored — none lost
+2b  Marks made offline hours ago still reach the other phone
+2c  Sign out, sign in as someone else on the same browser, see their work
+3   Larry opens a shortlist on a laptop he has never used
+4   Conor and Nick add different horses to the same shortlist at once; both survive
+5   Cold load under five seconds on cellular; second load instant
+6   Conor In and Nick Out on one horse: both visible, neither overwrites
 ```
+
+Plus: a client-supplied `updated_at` cannot influence delivery, and a pull larger than one
+page arrives complete. 2b and 2c were written after both failed in production.
 
 ## Things that were deliberately not done
 

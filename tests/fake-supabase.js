@@ -13,6 +13,16 @@
 var http = require('http');
 var url  = require('url');
 
+// Mirrors the schema: set_updated_at fires BEFORE INSERT OR UPDATE, so the server owns
+// the sync clock and a client cannot influence its own delivery. Flip to false to
+// reproduce the old behaviour, which is what the regression test does.
+//
+// Two ways this stub is still more forgiving than Postgres, deliberately noted rather
+// than fixed: it does not enforce the UPDATE `USING` policies (so it will not catch a
+// client trying to modify someone else's row), and it has no row cap, where Supabase
+// returns at most 1000 rows per request.
+var SERVER_OWNS_UPDATED_AT = true;
+
 function start(port, opts){
   opts = opts || {};
   var users = opts.users || {};            // email -> {id, password, display_name}
@@ -142,7 +152,13 @@ function start(port, opts){
               return send(res, 403, { code: '42501', message: 'new row violates row-level security policy' });
             var key = pk(table, row);
             var prev = tables[table][key] || {};
-            var next = Object.assign({}, prev, row, { updated_at: stamp() });
+            // Mirror the database exactly. Today set_updated_at is BEFORE UPDATE only, so
+            // an INSERT keeps whatever updated_at the client sent, and only an update to an
+            // existing row gets a server stamp. The stub used to stamp unconditionally,
+            // which made it behave like a correctly designed server and hid a real bug.
+            var serverOwns = SERVER_OWNS_UPDATED_AT || !!prev.updated_at;
+            var next = Object.assign({}, prev, row,
+              serverOwns ? { updated_at: stamp() } : (row.updated_at ? {} : { updated_at: stamp() }));
             tables[table][key] = next;
             saved.push(next);
           }
@@ -169,4 +185,7 @@ function start(port, opts){
   });
 }
 
-module.exports = { start: start };
+module.exports = {
+  start: start,
+  serverOwnsUpdatedAt: function(v){ SERVER_OWNS_UPDATED_AT = v; }
+};

@@ -166,7 +166,10 @@ var SESSION = null;                 // the signed-in Supabase session, or null
 var AUTH = { email:'', pw:'', error:null, busy:false };   // pw is in memory only, never stored
 
 /* ---------- view state ---------- */
-var V = { screen:'walk', barn:null, hip:null, open:null, q:'', mode:'num', list:null, pick:null, sheet:null, filter:'all', select:null, confirmDel:null, nameFor:null, from:null, compare:null, selCtx:null, editNote:null, confirmNote:null, showPage:false, confirmOut:null };
+function freshView(){
+  return { screen:'walk', barn:null, hip:null, open:null, q:'', mode:'num', list:null, pick:null, sheet:null, filter:'all', select:null, confirmDel:null, nameFor:null, from:null, compare:null, selCtx:null, editNote:null, confirmNote:null, showPage:false, confirmOut:null };
+}
+var V = freshView();
 function go(s, patch){ V.screen = s; if (patch) for (var k in patch) V[k] = patch[k]; window.scrollTo(0,0); render(); }
 
 /* ---------- helpers ---------- */
@@ -701,6 +704,11 @@ function sheetHTML(){
       +   '<button class="btn ghost" style="flex:1" data-syncnow="1">'+icon('cloud')+'Sync now</button>'
       +   '<button class="btn ghost" style="flex:1" data-exportall="1">'+icon('doc')+'Export marks</button>'
       + '</div>'
+      + '<div style="padding:9px 20px 0">'
+      +   '<button class="btn ghost" style="width:100%" data-resync="1">'+icon('cloud')+'Reload everything</button>'
+      +   '<div class="sub" style="font-size:11.5px;margin-top:6px">Re-reads every verdict, note and '
+      +     'shortlist from the server. Nothing you have marked is lost.</div>'
+      + '</div>'
       // Signing out drops the cached session; if anything is still queued that work
       // would be stranded on this device, so say so before letting it happen.
       + '<div style="padding:14px 20px 0">'
@@ -825,14 +833,19 @@ function goBack(){
 }
 
 document.addEventListener('click', function(ev){
-  var t = ev.target.closest ? ev.target.closest('[data-go],[data-barn],[data-row],[data-v],[data-note],[data-page],[data-add],[data-filter],[data-k],[data-list],[data-newlist],[data-toggle],[data-close],[data-stop],[data-copy],[data-back],[data-share],[data-csv],[data-exportall],[data-selstart],[data-selcancel],[data-selall],[data-addsel],[data-remove],[data-rename],[data-dellist],[data-copylist],[data-sugg],[data-namego],[data-compare],[data-cmpadd],[data-noteedit],[data-notesave],[data-notedel],[data-notecancel],[data-authgo],[data-account],[data-signout],[data-syncnow]') : null;
+  var t = ev.target.closest ? ev.target.closest('[data-go],[data-barn],[data-row],[data-v],[data-note],[data-page],[data-add],[data-filter],[data-k],[data-list],[data-newlist],[data-toggle],[data-close],[data-stop],[data-copy],[data-back],[data-share],[data-csv],[data-exportall],[data-selstart],[data-selcancel],[data-selall],[data-addsel],[data-remove],[data-rename],[data-dellist],[data-copylist],[data-sugg],[data-namego],[data-compare],[data-cmpadd],[data-noteedit],[data-notesave],[data-notedel],[data-notecancel],[data-account],[data-signout],[data-syncnow],[data-resync]') : null;
   if (!t) return;
   var d = t.dataset;
 
   if (d.stop != null && d.close == null) { ev.stopPropagation(); }
-  if (d.authgo != null){ doSignIn(); return; }
   if (d.account != null){ V.sheet = 'account'; V.confirmOut = null; probeBuild(); render(); return; }
   if (d.syncnow != null){ Store.sync(); toast(navigator.onLine ? 'Syncing…' : 'No signal — it will send itself.'); return; }
+  if (d.resync != null){
+    if (!navigator.onLine){ toast('No signal — try again when you have bars.'); return; }
+    toast('Reloading everything…');
+    Store.resync().then(function(){ toast('Reloaded from the server.'); render(); });
+    return;
+  }
   if (d.signout != null){
     // Two-tap, like every other destructive action here, and louder when work is queued.
     if (V.confirmOut !== 1){
@@ -1027,7 +1040,6 @@ document.addEventListener('keydown', function(ev){
   }
   if (ev.key !== 'Enter') return;
   var el = ev.target;
-  if (el && (el.id === 'authemail' || el.id === 'authpw')){ ev.preventDefault(); doSignIn(); return; }
   if (el && el.id === 'nameinput'){
     ev.preventDefault();
     var gb = document.getElementById('namego'); if (gb) gb.click();
@@ -1078,11 +1090,8 @@ function exportAll(){
    sign in / sign out
    ========================================================================== */
 
-var signInAt = 0;
 function doSignIn(){
-  if (AUTH.busy) return;
-  if (Date.now() - signInAt < 400) return;   // one tap, one attempt
-  signInAt = Date.now();
+  if (AUTH.busy) return;                     // the only guard needed: it clears itself
   // Read from AUTH, which the input handler keeps current — not straight from the DOM,
   // which a re-render (the catalog landing, the network flapping) may have just rebuilt.
   captureAuthFields();
@@ -1101,10 +1110,17 @@ function doSignIn(){
 
 function doSignOut(){
   var st = Store.status();
+  stopStarting();
   Auth.signOut().then(function(){
     return Store.reset();
   }).then(function(){
-    SESSION = null; V.sheet = null; V.confirmOut = null;
+    SESSION = null;
+    V = freshView();
+    BACK.length = 0;
+    if (location.hash) history.replaceState(null, '', location.pathname);
+    authSig = null;
+    var ae = document.getElementById('authemail'), ap = document.getElementById('authpw');
+    if (ae) ae.value = ''; if (ap) ap.value = '';
     AUTH = { email:'', pw:'', error: st.pending
       ? st.pending + ' change' + (st.pending===1?'':'s') + ' had not sent yet and were cleared from this device.'
       : null, busy:false };
@@ -1154,7 +1170,10 @@ function scheduleRender(){
   requestAnimationFrame(function(){ renderQueued = false; render(); });
 }
 
+var starting = null;
 function start(session){
+  if (starting === session.user.id) return Promise.resolve();
+  starting = session.user.id;
   SESSION = session;
   return loadCatalog().then(function(){
     return Store.init(Auth.client(), session.user.id, scheduleRender);
@@ -1162,6 +1181,7 @@ function start(session){
     if (!applyHash()) render();
   });
 }
+function stopStarting(){ starting = null; }
 
 function boot(){
   render();                                   // sign-in screen, instantly
