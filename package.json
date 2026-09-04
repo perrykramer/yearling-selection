@@ -1,0 +1,13 @@
+{
+  "name": "west-paces-sale-book",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Keeneland September yearling selection for West Paces Racing.",
+  "scripts": {
+    "dev": "node tools/serve.js",
+    "test": "node tests/acceptance.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
